@@ -20,6 +20,14 @@ An AI-powered email assistant that reads incoming emails from a real Gmail inbox
 - **IMAP / SMTP** (via `imapclient` and Python's built-in `smtplib`/`email`) for real Gmail integration
 - **python-dotenv** for keeping API keys and credentials out of source control
 
-## Setup
+## Try it yourself (live demo)
 
-1. Clone the repo:
+This project's automation is genuinely running — send a test email to:
+
+**abdulrehmanrauf5551@gmail.com**
+
+Try something:
+
+Within about 60 seconds (while the script is actively running), you should receive an AI-generated reply — classified by category and urgency, and written specifically in response to your message.
+
+**Note:** This only works while the automation is actively running on my machine. If you don't get a reply, the script may not be running at that moment — feel free to reach out and I can start it up for a live demo.
