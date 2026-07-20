@@ -255,16 +255,19 @@ def run_forever():
     print("Press Ctrl+C to stop.\n")
     logging.info("Automation started (auto-send mode, ignoring pre-existing unread emails).")
 
-    try:
-        while True:
+    while True:
+        try:
             processed = process_one_email()
             if not processed:
-                print(f"No new unread emails. Checking again in {CHECK_INTERVAL_SECONDS} seconds...", end="\r")
-            time.sleep(CHECK_INTERVAL_SECONDS)
-    except KeyboardInterrupt:
-        print("\n\n🛑 Stopped by user.")
-        logging.info("Automation stopped by user.")
-
+                print(f"No new unread emails. Checking again in {CHECK_INTERVAL_SECONDS} seconds...")
+        except KeyboardInterrupt:
+            print("\n\n🛑 Stopped by user.")
+            logging.info("Automation stopped by user.")
+            break
+        except Exception as e:
+            logging.error(f"Unexpected error in main loop: {e}")
+            print(f"Unexpected error: {e}")
+        time.sleep(CHECK_INTERVAL_SECONDS)
 
 if __name__ == "__main__":
     run_forever()
