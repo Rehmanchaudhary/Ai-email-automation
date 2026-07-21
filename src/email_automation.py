@@ -7,10 +7,25 @@ from email.utils import parseaddr
 from email.mime.text import MIMEText
 
 import smtplib
+import socket
 
 from dotenv import load_dotenv
 from groq import Groq
 from imapclient import IMAPClient
+
+
+# ============================================================
+# FORCE IPv4 (fixes "OSError: [Errno 101] Network is unreachable"
+# on Render, which happens when Python tries IPv6 first and the
+# container has no IPv6 route)
+# ============================================================
+
+_original_getaddrinfo = socket.getaddrinfo
+
+def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    return _original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+socket.getaddrinfo = _ipv4_only_getaddrinfo
 
 
 # ============================================================
