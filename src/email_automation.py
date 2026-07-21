@@ -4,11 +4,13 @@ import logging
 import email
 
 from email.utils import parseaddr
+from email.mime.text import MIMEText
+
+import smtplib
 
 from dotenv import load_dotenv
 from groq import Groq
 from imapclient import IMAPClient
-import resend
 
 
 # ============================================================
@@ -20,7 +22,6 @@ load_dotenv()
 GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
 
 # ============================================================
@@ -40,11 +41,6 @@ if not GMAIL_APP_PASSWORD:
 if not GROQ_API_KEY:
     raise RuntimeError(
         "GROQ_API_KEY is missing from environment variables."
-    )
-
-if not RESEND_API_KEY:
-    raise RuntimeError(
-        "RESEND_API_KEY is missing from environment variables."
     )
 
 
@@ -72,17 +68,12 @@ YOUR_NAME = "Rehman"
 
 
 # ============================================================
-# RESEND CONFIGURATION
-# ============================================================
-
-resend.api_key = RESEND_API_KEY
-
-
-# ============================================================
-# GMAIL IMAP CONFIGURATION
+# GMAIL IMAP / SMTP CONFIGURATION
 # ============================================================
 
 IMAP_HOST = "imap.gmail.com"
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 465
 
 CHECK_INTERVAL_SECONDS = 60
 
@@ -467,7 +458,7 @@ Email:
 
 
 # ============================================================
-# SEND EMAIL USING RESEND API
+# SEND EMAIL USING GMAIL SMTP (App Password)
 # ============================================================
 
 def send_email_real(
@@ -484,39 +475,43 @@ def send_email_real(
 
         print(
 
-            f"📤 Sending reply to {to_address} using Resend..."
+            f"📤 Sending reply to {to_address} using Gmail SMTP..."
 
         )
 
-        params = {
+        message = MIMEText(body)
 
-            "from": (
+        message["From"] = GMAIL_ADDRESS
 
-                "AI Email Automation "
+        message["To"] = to_address
 
-                "<onboarding@resend.dev>"
+        message["Subject"] = f"Re: {subject}"
 
-            ),
+        with smtplib.SMTP_SSL(
 
-            "to": [
+            SMTP_HOST,
 
-                to_address
+            SMTP_PORT
 
-            ],
+        ) as server:
 
-            "subject": (
+            server.login(
 
-                f"Re: {subject}"
+                GMAIL_ADDRESS,
 
-            ),
+                GMAIL_APP_PASSWORD
 
-            "text": body
+            )
 
-        }
+            server.sendmail(
 
-        response = resend.Emails.send(
-            params
-        )
+                GMAIL_ADDRESS,
+
+                [to_address],
+
+                message.as_string()
+
+            )
 
         print(
 
@@ -526,7 +521,7 @@ def send_email_real(
 
         logging.info(
 
-            f"Resend email sent successfully: {response}"
+            f"Gmail SMTP email sent successfully to {to_address}"
 
         )
 
@@ -536,13 +531,13 @@ def send_email_real(
 
         logging.exception(
 
-            "❌ RESEND EMAIL FAILED"
+            "❌ GMAIL SMTP SEND FAILED"
 
         )
 
         print(
 
-            f"❌ RESEND EMAIL FAILED: {e}"
+            f"❌ GMAIL SMTP SEND FAILED: {e}"
 
         )
 
