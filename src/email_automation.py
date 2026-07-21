@@ -249,7 +249,6 @@ def process_one_email():
 # ----- MAIN LOOP -----
 def run_forever():
     print(f"📬 AI Email Automation is starting up...")
-    mark_existing_unread_as_seen()
     print(f"Now checking for NEW emails every {CHECK_INTERVAL_SECONDS} seconds.")
     print("Auto-send mode: replies go out immediately, no review step.")
     print("Press Ctrl+C to stop.\n")
