@@ -12,14 +12,13 @@ from groq import Groq
 from imapclient import IMAPClient
 
 
-# ============================================================
+# =========================
 # SETUP
-# ============================================================
+# =========================
 
 load_dotenv()
 
 logging.basicConfig(
-    filename="automation.log",
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -39,143 +38,51 @@ SMTP_PORT = 587
 
 CHECK_INTERVAL_SECONDS = 60
 
-# This Gmail label permanently tracks emails already handled.
-PROCESSED_LABEL = "AI_AUTOMATION_PROCESSED"
 
+# =========================
+# FETCH EMAIL
+# =========================
 
-# ============================================================
-# GMAIL LABEL SETUP
-# ============================================================
-
-def ensure_processed_label(server):
-    """
-    Makes sure the Gmail label used to track processed emails exists.
-    """
-    try:
-        folders = server.list_folders()
-        folder_names = [folder[2] for folder in folders]
-
-        if PROCESSED_LABEL not in folder_names:
-            server.create_folder(PROCESSED_LABEL)
-            print(f"Created Gmail label: {PROCESSED_LABEL}")
-            logging.info(f"Created Gmail label: {PROCESSED_LABEL}")
-
-    except Exception as e:
-        # The label may already exist under a slightly different Gmail
-        # folder representation. We do not stop the whole application.
-        logging.warning(f"Could not create/check Gmail label: {e}")
-
-
-# ============================================================
-# ONE-TIME INITIALIZATION
-# ============================================================
-
-def initialize_existing_emails():
-    """
-    On the first run, mark all currently existing Inbox emails as processed.
-
-    This prevents the automation from replying to old emails already in
-    the inbox before the automation was deployed.
-
-    After this first initialization, only future unprocessed emails
-    will be handled.
-    """
+def fetch_latest_unread_email():
 
     try:
-        with IMAPClient(IMAP_HOST) as server:
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            server.select_folder("INBOX", readonly=False)
 
-            ensure_processed_label(server)
+        print("🔍 Checking Gmail for unread emails...")
 
-            # Search for all Inbox emails that do not have our processed label.
-            unprocessed = server.search([
-                "X-GM-RAW",
-                f"in:inbox -label:{PROCESSED_LABEL}"
-            ])
+        with IMAPClient(IMAP_HOST, ssl=True) as server:
 
-            if not unprocessed:
-                print("No existing emails need initialization.")
-                return
-
-            print(
-                f"Initializing {len(unprocessed)} existing email(s). "
-                "These will not receive automatic replies."
+            server.login(
+                GMAIL_ADDRESS,
+                GMAIL_APP_PASSWORD
             )
 
-            server.add_gmail_labels(
-                unprocessed,
-                [PROCESSED_LABEL]
-            )
+            server.select_folder("INBOX")
 
-            logging.info(
-                f"Initialized {len(unprocessed)} existing emails as processed."
-            )
-
-            print(
-                f"Initialized {len(unprocessed)} existing email(s). "
-                "Future emails will be processed automatically."
-            )
-
-    except Exception as e:
-        logging.error(f"Initialization failed: {e}")
-        print(f"Initialization error: {e}")
-
-
-# ============================================================
-# FETCH NEW EMAIL
-# ============================================================
-
-def fetch_latest_unprocessed_email():
-    """
-    Finds the newest Inbox email that does not have the processed label.
-
-    It does NOT depend on UNSEEN/read status.
-    """
-
-    try:
-        with IMAPClient(IMAP_HOST) as server:
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            server.select_folder("INBOX", readonly=False)
-
-            ensure_processed_label(server)
-
-            messages = server.search([
-                "X-GM-RAW",
-                f"in:inbox -label:{PROCESSED_LABEL}"
-            ])
+            messages = server.search(["UNSEEN"])
 
             if not messages:
                 return None
 
-            # Process the newest matching email.
             latest_uid = messages[-1]
 
-            # BODY.PEEK[] reads the email without marking it as read.
-            fetched = server.fetch(
+            raw_message = server.fetch(
                 [latest_uid],
-                ["BODY.PEEK[]"]
-            )
-
-            message_data = fetched[latest_uid]
-
-            raw_message = (
-                message_data.get(b"BODY[]")
-                or message_data.get(b"BODY.PEEK[]")
-            )
-
-            if raw_message is None:
-                raise ValueError("Could not retrieve email body.")
+                ["RFC822"]
+            )[latest_uid][b"RFC822"]
 
             msg = email.message_from_bytes(raw_message)
 
             raw_from = msg.get("From", "")
+
             sender_name, sender_email = parseaddr(raw_from)
 
             if not sender_name:
                 sender_name = sender_email.split("@")[0]
 
-            subject = msg.get("Subject", "(no subject)")
+            subject = msg.get(
+                "Subject",
+                "(no subject)"
+            )
 
             body = ""
 
@@ -184,6 +91,7 @@ def fetch_latest_unprocessed_email():
                 for part in msg.walk():
 
                     content_type = part.get_content_type()
+
                     disposition = str(
                         part.get("Content-Disposition")
                     )
@@ -192,6 +100,7 @@ def fetch_latest_unprocessed_email():
                         content_type == "text/plain"
                         and "attachment" not in disposition
                     ):
+
                         charset = (
                             part.get_content_charset()
                             or "utf-8"
@@ -202,6 +111,7 @@ def fetch_latest_unprocessed_email():
                         )
 
                         if payload:
+
                             body = payload.decode(
                                 charset,
                                 errors="replace"
@@ -221,6 +131,7 @@ def fetch_latest_unprocessed_email():
                 )
 
                 if payload:
+
                     body = payload.decode(
                         charset,
                         errors="replace"
@@ -229,7 +140,8 @@ def fetch_latest_unprocessed_email():
             body = body.strip()
 
             if not body:
-                body = "(No plain text content found in this email)"
+
+                body = "(No plain text content found)"
 
             return {
                 "uid": latest_uid,
@@ -241,62 +153,20 @@ def fetch_latest_unprocessed_email():
 
     except Exception as e:
 
-        logging.error(
-            f"Failed to fetch email: {e}"
+        logging.exception(
+            "❌ Error while fetching email"
         )
 
         print(
-            f"Error fetching email: {e}"
+            f"❌ Error while fetching email: {e}"
         )
 
         return None
 
 
-# ============================================================
-# MARK EMAIL AS PROCESSED
-# ============================================================
-
-def mark_email_as_processed(uid):
-
-    try:
-
-        with IMAPClient(IMAP_HOST) as server:
-
-            server.login(
-                GMAIL_ADDRESS,
-                GMAIL_APP_PASSWORD
-            )
-
-            server.select_folder(
-                "INBOX",
-                readonly=False
-            )
-
-            ensure_processed_label(server)
-
-            server.add_gmail_labels(
-                [uid],
-                [PROCESSED_LABEL]
-            )
-
-            logging.info(
-                f"Email UID {uid} marked as processed."
-            )
-
-    except Exception as e:
-
-        logging.error(
-            f"Failed to mark email as processed: {e}"
-        )
-
-        print(
-            f"Failed to mark email as processed: {e}"
-        )
-
-
-# ============================================================
+# =========================
 # FILTERS
-# ============================================================
+# =========================
 
 def is_automated_sender(sender_email):
 
@@ -308,10 +178,10 @@ def is_automated_sender(sender_email):
         "mailer-daemon"
     ]
 
-    sender_lower = sender_email.lower()
+    sender_email = sender_email.lower()
 
     return any(
-        pattern in sender_lower
+        pattern in sender_email
         for pattern in automated_patterns
     )
 
@@ -324,13 +194,15 @@ def is_self_sent(sender_email):
     )
 
 
-# ============================================================
+# =========================
 # AI
-# ============================================================
+# =========================
 
 def ask_ai(prompt):
 
     try:
+
+        print("🤖 Sending request to Groq AI...")
 
         response = client.chat.completions.create(
 
@@ -341,10 +213,12 @@ def ask_ai(prompt):
                     "role": "user",
                     "content": prompt
                 }
-            ]
+            ],
+
+            temperature=0.3
         )
 
-        return (
+        result = (
             response
             .choices[0]
             .message
@@ -352,14 +226,16 @@ def ask_ai(prompt):
             .strip()
         )
 
+        return result
+
     except Exception as e:
 
-        logging.error(
-            f"AI request failed: {e}"
+        logging.exception(
+            "❌ Groq AI request failed"
         )
 
         print(
-            f"Error talking to the AI: {e}"
+            f"❌ Groq AI request failed: {e}"
         )
 
         return None
@@ -368,20 +244,18 @@ def ask_ai(prompt):
 def classify_email(email_text):
 
     prompt = f"""
-Classify the following email into exactly ONE of these categories:
+Classify this email into exactly ONE category:
 
-- Order Issue
-- Complaint
-- General Inquiry
-- Support Request
-- Spam/Irrelevant
+Order Issue
+Complaint
+General Inquiry
+Support Request
+Spam/Irrelevant
 
 Respond with ONLY the category name.
 
 Email:
 {email_text}
-
-Category:
 """
 
     return ask_ai(prompt)
@@ -390,18 +264,16 @@ Category:
 def detect_urgency(email_text):
 
     prompt = f"""
-Read the following email and rate its urgency as exactly ONE of these:
+Rate this email as exactly ONE:
 
-- High
-- Medium
-- Low
+High
+Medium
+Low
 
 Respond with ONLY the urgency level.
 
 Email:
 {email_text}
-
-Urgency:
 """
 
     return ask_ai(prompt)
@@ -412,32 +284,31 @@ def generate_reply(email_text, sender_name):
     prompt = f"""
 You are a professional email assistant.
 
-Read the following email and write a short, professional reply.
+Write a short, natural, professional reply to this email.
 
 The sender's name is:
 {sender_name}
 
-Address them by this name in the greeting.
+Start with:
+Dear {sender_name},
 
-Sign off exactly as:
+End with exactly:
 
 Best regards,
 {YOUR_NAME}
 
-Do not use placeholders such as [Your Name].
+Do not use placeholders.
 
 Email:
 {email_text}
-
-Reply:
 """
 
     return ask_ai(prompt)
 
 
-# ============================================================
+# =========================
 # SEND EMAIL
-# ============================================================
+# =========================
 
 def send_email_real(
     to_address,
@@ -447,16 +318,23 @@ def send_email_real(
 
     try:
 
+        print(
+            f"📤 Sending reply to {to_address}..."
+        )
+
         msg = MIMEMultipart()
 
         msg["From"] = GMAIL_ADDRESS
+
         msg["To"] = to_address
+
         msg["Subject"] = f"Re: {subject}"
 
         msg.attach(
             MIMEText(
                 body,
-                "plain"
+                "plain",
+                "utf-8"
             )
         )
 
@@ -465,7 +343,11 @@ def send_email_real(
             SMTP_PORT
         ) as server:
 
+            server.ehlo()
+
             server.starttls()
+
+            server.ehlo()
 
             server.login(
                 GMAIL_ADDRESS,
@@ -478,109 +360,142 @@ def send_email_real(
                 msg.as_string()
             )
 
-        logging.info(
-            f"Email auto-sent to {to_address}"
+        print(
+            f"✅ REPLY SENT SUCCESSFULLY TO {to_address}"
         )
 
-        print(
-            "\n✅ Email sent successfully."
+        logging.info(
+            f"Reply successfully sent to {to_address}"
         )
 
         return True
 
     except Exception as e:
 
-        logging.error(
-            f"Failed to send email: {e}"
+        logging.exception(
+            "❌ SMTP SEND FAILED"
         )
 
         print(
-            f"\n❌ Failed to send: {e}"
+            f"❌ SMTP SEND FAILED: {e}"
         )
 
         return False
 
 
-# ============================================================
-# PROCESS ONE EMAIL
-# ============================================================
+# =========================
+# MARK EMAIL AS PROCESSED
+# =========================
+
+def mark_as_seen(uid):
+
+    try:
+
+        with IMAPClient(
+            IMAP_HOST,
+            ssl=True
+        ) as server:
+
+            server.login(
+                GMAIL_ADDRESS,
+                GMAIL_APP_PASSWORD
+            )
+
+            server.select_folder(
+                "INBOX",
+                readonly=False
+            )
+
+            server.add_flags(
+                [uid],
+                [b"\\Seen"]
+            )
+
+        print(
+            "✅ Email marked as processed."
+        )
+
+    except Exception as e:
+
+        print(
+            f"⚠️ Could not mark email as seen: {e}"
+        )
+
+
+# =========================
+# PROCESS EMAIL
+# =========================
 
 def process_one_email():
 
-    email_data = (
-        fetch_latest_unprocessed_email()
-    )
+    email_data = fetch_latest_unread_email()
 
     if email_data is None:
 
+        print(
+            "📭 No new unread emails."
+        )
+
         return False
 
-    uid = email_data["uid"]
-    sender_email = email_data["sender_email"]
 
-    print("\n" + "=" * 60)
+    print("\n")
+    print("=" * 60)
+    print("📩 NEW EMAIL FOUND")
+    print("=" * 60)
 
     print(
-        "----- NEW EMAIL FOUND -----"
+        f"From: {email_data['sender_name']} "
+        f"<{email_data['sender_email']}>"
     )
 
     print(
-        f"From: "
-        f"{email_data['sender_name']} "
-        f"<{sender_email}>"
+        f"Subject: {email_data['subject']}"
     )
 
-    print(
-        f"Subject: "
-        f"{email_data['subject']}"
-    )
 
-    print(
-        email_data["body"]
-    )
+    sender_email = email_data[
+        "sender_email"
+    ]
 
-    # --------------------------------------------------------
-    # AUTOMATED EMAIL
-    # --------------------------------------------------------
 
-    if is_automated_sender(sender_email):
+    # Skip automated emails
+
+    if is_automated_sender(
+        sender_email
+    ):
 
         print(
-            f"\n⏭️ Skipping automated sender: "
-            f"{sender_email}"
+            "⏭️ Automated sender skipped."
         )
 
-        logging.info(
-            f"Skipped automated sender: "
-            f"{sender_email}"
+        mark_as_seen(
+            email_data["uid"]
         )
-
-        mark_email_as_processed(uid)
 
         return True
 
-    # --------------------------------------------------------
-    # SELF-SENT EMAIL
-    # --------------------------------------------------------
 
-    if is_self_sent(sender_email):
+    # Skip emails sent from the same account
+
+    if is_self_sent(
+        sender_email
+    ):
 
         print(
-            "\n⏭️ Skipping self-sent email "
-            "to avoid a reply loop."
+            "⏭️ Self-sent email skipped."
         )
 
-        logging.info(
-            "Skipped self-sent email."
+        mark_as_seen(
+            email_data["uid"]
         )
-
-        mark_email_as_processed(uid)
 
         return True
 
-    # --------------------------------------------------------
-    # CLASSIFY
-    # --------------------------------------------------------
+
+    # CLASSIFICATION
+
+    print("🏷️ Classifying email...")
 
     category = classify_email(
         email_data["body"]
@@ -588,20 +503,22 @@ def process_one_email():
 
     if category is None:
 
+        print(
+            "❌ Classification failed."
+        )
+
         return False
 
     print(
-        f"\n----- CATEGORY -----\n"
-        f"{category}"
+        f"🏷️ CATEGORY: {category}"
     )
 
-    logging.info(
-        f"Classified as: {category}"
-    )
 
-    # --------------------------------------------------------
     # URGENCY
-    # --------------------------------------------------------
+
+    print(
+        "⚡ Detecting urgency..."
+    )
 
     urgency = detect_urgency(
         email_data["body"]
@@ -609,121 +526,115 @@ def process_one_email():
 
     if urgency is None:
 
+        print(
+            "❌ Urgency detection failed."
+        )
+
         return False
 
     print(
-        f"\n----- URGENCY -----\n"
-        f"{urgency}"
+        f"⚡ URGENCY: {urgency}"
     )
 
-    logging.info(
-        f"Urgency: {urgency}"
-    )
 
-    # --------------------------------------------------------
     # GENERATE REPLY
-    # --------------------------------------------------------
+
+    print(
+        "✍️ Generating AI reply..."
+    )
 
     reply = generate_reply(
+
         email_data["body"],
+
         email_data["sender_name"]
+
     )
 
     if reply is None:
 
+        print(
+            "❌ Reply generation failed."
+        )
+
         return False
 
-    print(
-        f"\n----- AUTO-REPLY -----\n"
-        f"{reply}"
-    )
 
-    # --------------------------------------------------------
+    print("\n")
+    print("🤖 GENERATED REPLY:")
+    print("-" * 60)
+    print(reply)
+    print("-" * 60)
+
+
     # SEND REPLY
-    # --------------------------------------------------------
 
-    sent_successfully = send_email_real(
+    sent = send_email_real(
 
         email_data["sender_email"],
 
         email_data["subject"],
 
         reply
+
     )
 
-    # Only mark as processed after successful handling.
-    # This prevents failed emails from being permanently skipped.
 
-    if sent_successfully:
+    if sent:
 
-        mark_email_as_processed(uid)
+        # Only mark as seen after successful processing
+
+        mark_as_seen(
+            email_data["uid"]
+        )
+
+        print(
+            "🎉 COMPLETE: Email processed and reply sent!"
+        )
 
         return True
+
+
+    print(
+        "❌ Email was NOT sent."
+    )
 
     return False
 
 
-# ============================================================
+# =========================
 # MAIN LOOP
-# ============================================================
+# =========================
 
 def run_forever():
 
     print(
-        "📬 AI Email Automation is starting up..."
-    )
-
-    # This only initializes old emails the first time.
-    # Future emails are tracked using a persistent Gmail label.
-    initialize_existing_emails()
-
-    print(
-        f"Now checking for NEW emails every "
-        f"{CHECK_INTERVAL_SECONDS} seconds."
+        "📬 AI EMAIL AUTOMATION STARTED"
     )
 
     print(
-        "Auto-send mode: replies go out immediately."
+        "📡 Checking Gmail every 60 seconds"
     )
 
-    logging.info(
-        "Automation started."
+    print(
+        "🚀 Automatic reply mode enabled"
     )
+
 
     while True:
 
         try:
 
-            processed = process_one_email()
-
-            if not processed:
-
-                print(
-                    f"No new emails. "
-                    f"Checking again in "
-                    f"{CHECK_INTERVAL_SECONDS} seconds..."
-                )
-
-        except KeyboardInterrupt:
-
-            print(
-                "\n🛑 Automation stopped."
-            )
-
-            logging.info(
-                "Automation stopped."
-            )
-
-            break
+            process_one_email()
 
         except Exception as e:
 
-            logging.error(
-                f"Unexpected error: {e}"
+            logging.exception(
+                "Unexpected error in main loop"
             )
 
             print(
-                f"Unexpected error: {e}"
+                f"❌ Unexpected error: {e}"
             )
 
         time.sleep(
