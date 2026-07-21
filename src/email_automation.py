@@ -3,6 +3,7 @@ import time
 import logging
 import smtplib
 import email
+
 from email.utils import parseaddr
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -12,36 +13,67 @@ from groq import Groq
 from imapclient import IMAPClient
 
 
-# =========================
-# SETUP
-# =========================
+# ============================================================
+# LOAD ENVIRONMENT VARIABLES
+# ============================================================
 
 load_dotenv()
+
+GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+
+# ============================================================
+# VALIDATE ENVIRONMENT VARIABLES
+# ============================================================
+
+if not GMAIL_ADDRESS:
+    raise RuntimeError("GMAIL_ADDRESS is missing from environment variables.")
+
+if not GMAIL_APP_PASSWORD:
+    raise RuntimeError("GMAIL_APP_PASSWORD is missing from environment variables.")
+
+if not GROQ_API_KEY:
+    raise RuntimeError("GROQ_API_KEY is missing from environment variables.")
+
+
+# ============================================================
+# LOGGING
+# ============================================================
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+# ============================================================
+# AI CONFIGURATION
+# ============================================================
+
+client = Groq(api_key=GROQ_API_KEY)
 
 MODEL = "llama-3.1-8b-instant"
 
-GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-
 YOUR_NAME = "Rehman"
 
+
+# ============================================================
+# GMAIL CONFIGURATION
+# ============================================================
+
 IMAP_HOST = "imap.gmail.com"
+
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 
 CHECK_INTERVAL_SECONDS = 60
 
 
-# =========================
-# FETCH EMAIL
-# =========================
+# ============================================================
+# FETCH LATEST UNREAD EMAIL
+# ============================================================
 
 def fetch_latest_unread_email():
 
@@ -61,6 +93,7 @@ def fetch_latest_unread_email():
             messages = server.search(["UNSEEN"])
 
             if not messages:
+
                 return None
 
             latest_uid = messages[-1]
@@ -76,7 +109,14 @@ def fetch_latest_unread_email():
 
             sender_name, sender_email = parseaddr(raw_from)
 
+            if not sender_email:
+
+                logging.warning("Email has no valid sender address.")
+
+                return None
+
             if not sender_name:
+
                 sender_name = sender_email.split("@")[0]
 
             subject = msg.get(
@@ -92,13 +132,13 @@ def fetch_latest_unread_email():
 
                     content_type = part.get_content_type()
 
-                    disposition = str(
-                        part.get("Content-Disposition")
+                    content_disposition = str(
+                        part.get("Content-Disposition", "")
                     )
 
                     if (
                         content_type == "text/plain"
-                        and "attachment" not in disposition
+                        and "attachment" not in content_disposition.lower()
                     ):
 
                         charset = (
@@ -141,7 +181,7 @@ def fetch_latest_unread_email():
 
             if not body:
 
-                body = "(No plain text content found)"
+                body = "(No readable plain-text content found.)"
 
             return {
                 "uid": latest_uid,
@@ -154,7 +194,7 @@ def fetch_latest_unread_email():
     except Exception as e:
 
         logging.exception(
-            "❌ Error while fetching email"
+            "❌ ERROR WHILE FETCHING EMAIL"
         )
 
         print(
@@ -164,9 +204,9 @@ def fetch_latest_unread_email():
         return None
 
 
-# =========================
+# ============================================================
 # FILTERS
-# =========================
+# ============================================================
 
 def is_automated_sender(sender_email):
 
@@ -194,9 +234,9 @@ def is_self_sent(sender_email):
     )
 
 
-# =========================
-# AI
-# =========================
+# ============================================================
+# GROQ AI
+# ============================================================
 
 def ask_ai(prompt):
 
@@ -231,7 +271,7 @@ def ask_ai(prompt):
     except Exception as e:
 
         logging.exception(
-            "❌ Groq AI request failed"
+            "❌ GROQ AI REQUEST FAILED"
         )
 
         print(
@@ -240,6 +280,10 @@ def ask_ai(prompt):
 
         return None
 
+
+# ============================================================
+# EMAIL CLASSIFICATION
+# ============================================================
 
 def classify_email(email_text):
 
@@ -261,6 +305,10 @@ Email:
     return ask_ai(prompt)
 
 
+# ============================================================
+# URGENCY DETECTION
+# ============================================================
+
 def detect_urgency(email_text):
 
     prompt = f"""
@@ -279,6 +327,10 @@ Email:
     return ask_ai(prompt)
 
 
+# ============================================================
+# GENERATE AI REPLY
+# ============================================================
+
 def generate_reply(email_text, sender_name):
 
     prompt = f"""
@@ -287,9 +339,11 @@ You are a professional email assistant.
 Write a short, natural, professional reply to this email.
 
 The sender's name is:
+
 {sender_name}
 
 Start with:
+
 Dear {sender_name},
 
 End with exactly:
@@ -300,15 +354,16 @@ Best regards,
 Do not use placeholders.
 
 Email:
+
 {email_text}
 """
 
     return ask_ai(prompt)
 
 
-# =========================
-# SEND EMAIL
-# =========================
+# ============================================================
+# SEND EMAIL THROUGH GMAIL SMTP
+# ============================================================
 
 def send_email_real(
     to_address,
@@ -322,15 +377,15 @@ def send_email_real(
             f"📤 Sending reply to {to_address}..."
         )
 
-        msg = MIMEMultipart()
+        message = MIMEMultipart()
 
-        msg["From"] = GMAIL_ADDRESS
+        message["From"] = GMAIL_ADDRESS
 
-        msg["To"] = to_address
+        message["To"] = to_address
 
-        msg["Subject"] = f"Re: {subject}"
+        message["Subject"] = f"Re: {subject}"
 
-        msg.attach(
+        message.attach(
             MIMEText(
                 body,
                 "plain",
@@ -338,9 +393,14 @@ def send_email_real(
             )
         )
 
+        print(
+            "🔐 Connecting to Gmail SMTP..."
+        )
+
         with smtplib.SMTP(
             SMTP_HOST,
-            SMTP_PORT
+            SMTP_PORT,
+            timeout=30
         ) as server:
 
             server.ehlo()
@@ -349,15 +409,21 @@ def send_email_real(
 
             server.ehlo()
 
+            print(
+                "🔑 Authenticating with Gmail..."
+            )
+
             server.login(
                 GMAIL_ADDRESS,
                 GMAIL_APP_PASSWORD
             )
 
-            server.sendmail(
-                GMAIL_ADDRESS,
-                to_address,
-                msg.as_string()
+            print(
+                "📨 Sending message..."
+            )
+
+            server.send_message(
+                message
             )
 
         print(
@@ -370,22 +436,57 @@ def send_email_real(
 
         return True
 
-    except Exception as e:
+
+    except smtplib.SMTPAuthenticationError as e:
 
         logging.exception(
-            "❌ SMTP SEND FAILED"
+            "❌ GMAIL SMTP AUTHENTICATION FAILED"
         )
 
         print(
-            f"❌ SMTP SEND FAILED: {e}"
+            "❌ GMAIL SMTP AUTHENTICATION FAILED"
+        )
+
+        print(
+            "Check that GMAIL_APP_PASSWORD is a valid Gmail App Password."
+        )
+
+        print(
+            f"Technical details: {e}"
         )
 
         return False
 
 
-# =========================
-# MARK EMAIL AS PROCESSED
-# =========================
+    except smtplib.SMTPException as e:
+
+        logging.exception(
+            "❌ GMAIL SMTP ERROR"
+        )
+
+        print(
+            f"❌ GMAIL SMTP ERROR: {e}"
+        )
+
+        return False
+
+
+    except Exception as e:
+
+        logging.exception(
+            "❌ UNEXPECTED SMTP ERROR"
+        )
+
+        print(
+            f"❌ UNEXPECTED SMTP ERROR: {e}"
+        )
+
+        return False
+
+
+# ============================================================
+# MARK EMAIL AS SEEN
+# ============================================================
 
 def mark_as_seen(uid):
 
@@ -422,9 +523,9 @@ def mark_as_seen(uid):
         )
 
 
-# =========================
-# PROCESS EMAIL
-# =========================
+# ============================================================
+# PROCESS ONE EMAIL
+# ============================================================
 
 def process_one_email():
 
@@ -439,10 +540,11 @@ def process_one_email():
         return False
 
 
-    print("\n")
+    print()
     print("=" * 60)
     print("📩 NEW EMAIL FOUND")
     print("=" * 60)
+
 
     print(
         f"From: {email_data['sender_name']} "
@@ -454,16 +556,14 @@ def process_one_email():
     )
 
 
-    sender_email = email_data[
-        "sender_email"
-    ]
+    sender_email = email_data["sender_email"]
 
 
-    # Skip automated emails
+    # --------------------------------------------------------
+    # SKIP AUTOMATED EMAILS
+    # --------------------------------------------------------
 
-    if is_automated_sender(
-        sender_email
-    ):
+    if is_automated_sender(sender_email):
 
         print(
             "⏭️ Automated sender skipped."
@@ -476,11 +576,11 @@ def process_one_email():
         return True
 
 
-    # Skip emails sent from the same account
+    # --------------------------------------------------------
+    # SKIP SELF-SENT EMAILS
+    # --------------------------------------------------------
 
-    if is_self_sent(
-        sender_email
-    ):
+    if is_self_sent(sender_email):
 
         print(
             "⏭️ Self-sent email skipped."
@@ -493,9 +593,13 @@ def process_one_email():
         return True
 
 
+    # --------------------------------------------------------
     # CLASSIFICATION
+    # --------------------------------------------------------
 
-    print("🏷️ Classifying email...")
+    print(
+        "🏷️ Classifying email..."
+    )
 
     category = classify_email(
         email_data["body"]
@@ -514,7 +618,9 @@ def process_one_email():
     )
 
 
+    # --------------------------------------------------------
     # URGENCY
+    # --------------------------------------------------------
 
     print(
         "⚡ Detecting urgency..."
@@ -537,7 +643,9 @@ def process_one_email():
     )
 
 
+    # --------------------------------------------------------
     # GENERATE REPLY
+    # --------------------------------------------------------
 
     print(
         "✍️ Generating AI reply..."
@@ -560,14 +668,27 @@ def process_one_email():
         return False
 
 
-    print("\n")
-    print("🤖 GENERATED REPLY:")
-    print("-" * 60)
-    print(reply)
-    print("-" * 60)
+    print()
+    print(
+        "🤖 GENERATED REPLY:"
+    )
+
+    print(
+        "-" * 60
+    )
+
+    print(
+        reply
+    )
+
+    print(
+        "-" * 60
+    )
 
 
+    # --------------------------------------------------------
     # SEND REPLY
+    # --------------------------------------------------------
 
     sent = send_email_real(
 
@@ -581,8 +702,6 @@ def process_one_email():
 
 
     if sent:
-
-        # Only mark as seen after successful processing
 
         mark_as_seen(
             email_data["uid"]
@@ -602,9 +721,9 @@ def process_one_email():
     return False
 
 
-# =========================
+# ============================================================
 # MAIN LOOP
-# =========================
+# ============================================================
 
 def run_forever():
 
@@ -630,7 +749,7 @@ def run_forever():
         except Exception as e:
 
             logging.exception(
-                "Unexpected error in main loop"
+                "❌ UNEXPECTED ERROR IN MAIN LOOP"
             )
 
             print(
@@ -641,6 +760,10 @@ def run_forever():
             CHECK_INTERVAL_SECONDS
         )
 
+
+# ============================================================
+# LOCAL EXECUTION
+# ============================================================
 
 if __name__ == "__main__":
 
