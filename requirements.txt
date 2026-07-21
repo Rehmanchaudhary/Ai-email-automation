@@ -3,3 +3,4 @@ python-dotenv
 imapclient
 flask
 gunicorn
+resend
