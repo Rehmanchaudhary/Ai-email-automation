@@ -88,7 +88,7 @@ YOUR_NAME = "Rehman"
 
 IMAP_HOST = "imap.gmail.com"
 SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 465
+SMTP_PORT = 587
 
 CHECK_INTERVAL_SECONDS = 60
 
@@ -502,13 +502,17 @@ def send_email_real(
 
         message["Subject"] = f"Re: {subject}"
 
-        with smtplib.SMTP_SSL(
+        with smtplib.SMTP(
 
             SMTP_HOST,
 
-            SMTP_PORT
+            SMTP_PORT,
+
+            timeout=30
 
         ) as server:
+
+            server.starttls()
 
             server.login(
 
